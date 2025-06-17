@@ -1,0 +1,107 @@
+name: Flutter CI/CD
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.0'
+          channel: 'stable'
+      - name: Install dependencies
+        run: flutter pub get
+      - name: Verify formatting
+        run: dart format --output=none --set-exit-if-changed .
+      - name: Analyze project source
+        run: flutter analyze
+      - name: Run tests
+        run: flutter test
+
+  build-android:
+    name: Build Android
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.0'
+          channel: 'stable'
+      - name: Install dependencies
+        run: flutter pub get
+      - name: Build APK
+        run: flutter build apk --release
+      - name: Upload APK
+        uses: actions/upload-artifact@v3
+        with:
+          name: release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+
+  build-ios:
+    name: Build iOS
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.0'
+          channel: 'stable'
+      - name: Install dependencies
+        run: flutter pub get
+      - name: Build iOS
+        run: flutter build ios --release --no-codesign
+      - name: Upload iOS build
+        uses: actions/upload-artifact@v3
+        with:
+          name: release-ios
+          path: build/ios/iphoneos/Runner.app
+
+  deploy:
+    name: Deploy
+    needs: [build-android, build-ios]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Download Android APK
+        uses: actions/download-artifact@v3
+        with:
+          name: release-apk
+      - name: Download iOS build
+        uses: actions/download-artifact@v3
+        with:
+          name: release-ios
+      
+      # Firebase App Distribution
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+      
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools
+      
+      - name: Firebase Login
+        run: firebase login:ci --token "${{ secrets.FIREBASE_TOKEN }}"
+      
+      - name: Deploy to Firebase App Distribution (Android)
+        run: |
+          firebase appdistribution:distribute build/app/outputs/flutter-apk/app-release.apk \
+            --app "${{ secrets.FIREBASE_ANDROID_APP_ID }}" \
+            --groups "testers" \
+            --release-notes "New release from GitHub Actions"
+      
+      - name: Deploy to Firebase App Distribution (iOS)
+        run: |
+          firebase appdistribution:distribute build/ios/iphoneos/Runner.app \
+            --app "${{ secrets.FIREBASE_IOS_APP_ID }}" \
+            --groups "testers" \
+            --release-notes "New release from GitHub Actions" 
